@@ -73,6 +73,6 @@ public class EmailGeneratorService {
 
     private String buildPrompt(EmailRequest emailRequest) {
         return "Generate a professional email reply. Tone: " + emailRequest.getTone() +
-                "\nOriginal Email: " + emailRequest.getEmailContent();
+                "\nOriginal Email=: " + emailRequest.getEmailContent();
     }
 }
