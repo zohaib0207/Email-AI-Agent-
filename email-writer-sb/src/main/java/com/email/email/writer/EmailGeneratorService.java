@@ -6,17 +6,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
+
+import java.util.List;
 import java.util.Map;
 
 @Service
 public class EmailGeneratorService {
 
     private final WebClient webClient;
-
-    @Value("${gemini.api.url}")
-    private String geminiAPIUrl;
-
     @Value("${gemini.api.key}")
     private String geminiAPIkey;
 
@@ -24,55 +21,60 @@ public class EmailGeneratorService {
         this.webClient = webClientBuilder.build();
     }
 
-    public String generateEmailReply(EmailRequest emailRequest) {
-        String prompt = buildPrompt(emailRequest);
+    public Mono<String> generateEmailReply(EmailRequest emailRequest) {
+        String tone = (emailRequest.getTone() == null || emailRequest.getTone().isEmpty())
+                ? "professional"
+                : emailRequest.getTone();
+
+        String prompt = "Write ONLY ONE " + tone + " email reply.\n"
+                + "Do not give multiple options.\n"
+                + "Do not add explanations.\n"
+                + "Just give the final email.\n\n"
+                + "Email:\n" + emailRequest.getEmailContent();
 
         Map<String, Object> requestBody = Map.of(
-                "contents", new Object[]{
-                        Map.of("parts", new Object[]{
-                                Map.of("text", prompt)
-                        })
-                }
+                "contents", List.of(
+                        Map.of(
+                                "parts", List.of(
+                                        Map.of("text", prompt)
+                                )
+                        )
+                )
         );
 
-        try {
-            String response = Mono.fromCallable(() -> {
-                        return webClient.post()
-                                .uri(geminiAPIUrl + "?key=" + geminiAPIkey)
-                                .header("Content-Type", "application/json")
-                                .bodyValue(requestBody)
-                                .retrieve()
-                                .bodyToMono(String.class)
-                                .block();
-                    })
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .block();
-
-            return extractResponseContent(response);
-        } catch (Exception e) {
-            return "Connection Error: " + e.getMessage();
-        }
+        return webClient.post()
+                .uri("https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=" + geminiAPIkey)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .bodyValue(requestBody)
+                .exchangeToMono(response ->
+                        response.bodyToMono(String.class)
+                                .map(body -> {
+                                    System.out.println("STATUS: " + response.statusCode());
+                                    System.out.println("BODY: " + body);
+                                    return body;
+                                })
+                )
+                .retry(2)
+                .map(this::extractResponseContent)
+                .onErrorResume(e -> Mono.just("ERROR: " + e.getMessage()));
     }
 
     private String extractResponseContent(String response) {
         try {
             ObjectMapper mapper = new ObjectMapper();
-            JsonNode rootNode = mapper.readTree(response);
+            JsonNode root = mapper.readTree(response);
 
-            // Check if the AI actually returned a result
-            if (rootNode.has("candidates")) {
-                return rootNode.path("candidates").get(0)
-                        .path("content").path("parts").get(0)
-                        .path("text").asText();
-            }
-            return "Google Error: " + response;
+            return root.path("candidates")
+                    .get(0)
+                    .path("content")
+                    .path("parts")
+                    .get(0)
+                    .path("text")
+                    .asText();
+
         } catch (Exception e) {
-            return "Parsing Error: " + e.getMessage();
+            return "Parsing failed: " + response;
         }
-    }
-
-    private String buildPrompt(EmailRequest emailRequest) {
-        return "Generate a professional email reply. Tone: " + emailRequest.getTone() +
-                "\nOriginal Email==: " + emailRequest.getEmailContent();
     }
 }
