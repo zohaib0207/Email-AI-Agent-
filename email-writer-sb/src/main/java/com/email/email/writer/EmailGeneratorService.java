@@ -76,5 +76,8 @@ public class EmailGeneratorService {
         } catch (Exception e) {
             return "Parsing failed: " + response;
         }
+
+
+
     }
 }
